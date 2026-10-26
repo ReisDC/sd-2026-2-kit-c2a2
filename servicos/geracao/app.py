@@ -1,14 +1,14 @@
 """
 Servico 3 - GERACAO: monta o prompt com o contexto e chama o LLM.
 
-TAREFA 3: proteger a chamada ao LLM com o circuit breaker.
+Chamada ao LLM protegida com circuit breaker, timeout e retentativas.
 
 Rodar: uvicorn servicos.geracao.app:app --port 8003
 """
 import os
 
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from servicos.comum.circuit_breaker import CircuitBreaker, CircuitoAberto
@@ -31,9 +31,16 @@ def perguntar(p: Pergunta):
     r.raise_for_status()
     contexto = [t["texto"] for t in r.json()["resultados"]]
 
-    # TAREFA 3: envolva a chamada gerar(...) com disjuntor.chamar(...)
-    # e trate CircuitoAberto devolvendo 503 com mensagem clara.
-    resposta = gerar(p.pergunta, contexto)
+    try:
+        resposta = disjuntor.chamar(gerar, p.pergunta, contexto)
+    except CircuitoAberto:
+        raise HTTPException(status_code=503,
+                            detail="LLM temporariamente indisponivel: circuito aberto.",
+                            headers={"Retry-After": str(disjuntor.espera_segundos)}) from None
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail="Tempo-limite do LLM excedido.") from None
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        raise HTTPException(status_code=502, detail="Falha ao obter resposta do LLM.") from None
 
     return {"pergunta": p.pergunta, "resposta": resposta, "contexto": contexto}
 

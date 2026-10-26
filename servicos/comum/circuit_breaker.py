@@ -10,6 +10,7 @@ Estados:
   meio     -> deixa passar UMA chamada de teste para ver se voltou
 """
 import time
+from threading import Lock
 
 
 class CircuitoAberto(Exception):
@@ -24,26 +25,42 @@ class CircuitBreaker:
         self.falhas = 0
         self.estado = "fechado"
         self.aberto_em = 0.0
+        self._lock = Lock()
+        self._teste_em_andamento = False
 
     def chamar(self, funcao, *args, **kwargs):
-        if self.estado == "aberto":
-            if time.time() - self.aberto_em >= self.espera_segundos:
-                self.estado = "meio"
-            else:
-                raise CircuitoAberto("disjuntor aberto: chamada recusada")
+        with self._lock:
+            if self.estado == "aberto":
+                if time.monotonic() - self.aberto_em >= self.espera_segundos:
+                    self.estado = "meio"
+                else:
+                    raise CircuitoAberto("disjuntor aberto: chamada recusada")
+            if self.estado == "meio":
+                if self._teste_em_andamento:
+                    raise CircuitoAberto("teste de recuperacao em andamento")
+                self._teste_em_andamento = True
+            teste = self.estado == "meio"
         try:
             resultado = funcao(*args, **kwargs)
         except Exception:
-            self._registrar_falha()
+            with self._lock:
+                self._registrar_falha()
+                if teste:
+                    self._teste_em_andamento = False
             raise
-        self._registrar_sucesso()
+        with self._lock:
+            # Uma chamada antiga nao deve fechar um circuito ja aberto.
+            if teste or self.estado == "fechado":
+                self._registrar_sucesso()
+            if teste:
+                self._teste_em_andamento = False
         return resultado
 
     def _registrar_falha(self):
         self.falhas += 1
         if self.falhas >= self.limite_falhas or self.estado == "meio":
             self.estado = "aberto"
-            self.aberto_em = time.time()
+            self.aberto_em = time.monotonic()
 
     def _registrar_sucesso(self):
         self.falhas = 0

@@ -61,6 +61,40 @@ curl -X POST http://localhost:8003/perguntar -H "Content-Type: application/json"
 
 ## Estrutura do projeto
 
+### Proteção da chamada ao LLM (item 4 do enunciado)
+
+O serviço de geração envolve `gerar` com um circuit breaker compartilhado pelas
+requisições do mesmo processo. Após **3 gerações consecutivas com falha**, o circuito
+abre por **20 segundos**. Nesse período, a chamada ao LLM é recusada com HTTP **503**
+e `Retry-After`. Depois, uma única geração testa a recuperação: sucesso fecha o
+circuito; falha abre novamente. Com vários processos, cada um mantém seu circuito.
+
+O cliente usa timeout de **20 segundos por tentativa** e até **3 tentativas no total**,
+com esperas de **1 e 2 segundos**. Repete timeout, erro de conexão e HTTP
+408/429/500/502/503/504. Outros erros HTTP, como chave inválida (401), não são
+repetidos. Uma geração conta como uma falha no circuito apenas após encerrar suas
+tentativas. O timeout do Requests limita conexão/inatividade de leitura; não é um
+prazo total para a requisição inteira, que inclui recuperação e retentativas.
+
+Timeout esgotado retorna HTTP **504**; falha de comunicação ou resposta inválida
+do LLM retorna **502**. O modo simulado continua funcionando sem chave de API.
+
+Configurações: `LLM_TIMEOUT`, `LLM_TENTATIVAS` e `LLM_ESPERA_RETRY`, listadas em
+`.env.example`. Exporte essas variáveis no terminal ou use
+`uvicorn servicos.geracao.app:app --port 8003 --env-file .env`.
+Copiar `.env.example` sozinho não carrega as variáveis no processo.
+
+Testes sem chave de API, sem chamadas externas e sem espera real:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Os testes verificam falhas transitórias, erros HTTP, limite de tentativas,
+propagação do timeout, abertura e recuperação do circuito, exclusividade da
+chamada de teste, códigos de erro do endpoint e modo simulado. O fluxo completo
+ainda depende das partes de ingestão, recuperação e mensageria do grupo.
+
 ```
 sd-2026-2-kit-c2a2/
 ├── servicos/
