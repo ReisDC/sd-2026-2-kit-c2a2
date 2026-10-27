@@ -8,14 +8,14 @@
 - [X] **2. Busca por similaridade** - `servicos/recuperacao/app.py`
       Vetorizar a pergunta, comparar com cada documento e devolver os top_k. (Aula 9/10)
 
-- [ ] **3. Circuit breaker no LLM** - `servicos/geracao/app.py`
+- [X] **3. Circuit breaker no LLM** - `servicos/geracao/app.py`
       Envolver a chamada `gerar(...)` com `disjuntor.chamar(...)` e devolver 503
       quando o circuito estiver aberto. (Aula 11)
 
 - [ ] **4. Mensageria** - novo worker + `docker-compose.yml`
       Ao menos UMA etapa do fluxo deve passar por fila, e nao por chamada direta. (Aula 8)
 
-- [ ] **5. Fluxo completo** - de ponta a ponta
+- [X] **5. Fluxo completo** - de ponta a ponta
       Pergunta entra em /perguntar e sai uma resposta fundamentada nos documentos.
 
 - [ ] **6. README com diagrama** da arquitetura dos tres servicos.

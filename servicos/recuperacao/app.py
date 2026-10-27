@@ -4,6 +4,8 @@ Servico 2 - RECUPERACAO: recebe uma pergunta, busca os trechos mais relevantes.
 TAREFA 2: vetorizar a pergunta, comparar com cada documento e devolver os top_k.
 Rodar: uvicorn servicos.recuperacao.app:app --port 8002 --reload
 """
+import os
+
 import requests
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -15,7 +17,8 @@ from servicos.comum.embeddings import Vetorizador
 app = FastAPI(title="Recuperacao - C2.A2")
 
 vetorizador = Vetorizador()
-INGESTAO_URL = "http://localhost:8001/indice"
+URL_INGESTAO = os.getenv("URL_INGESTAO", "http://localhost:8001")
+INGESTAO_URL = f"{URL_INGESTAO.rstrip('/')}/indice"
 
 
 class Pergunta(BaseModel):
@@ -28,15 +31,16 @@ def recuperar(pergunta: Pergunta):
     """Busca os documentos mais relevantes para a pergunta fornecida."""
     # 1. Obter o índice atualizado do serviço de ingestão
     try:
-        response = requests.get(INGESTAO_URL)
+        response = requests.get(INGESTAO_URL, timeout=10)
         response.raise_for_status()
         dados = response.json()
         itens = dados.get("itens", [])
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Erro ao contactar o serviço de ingestão: {e}"
-        )
+    except requests.Timeout:
+        raise HTTPException(status_code=504,
+                            detail="Tempo-limite da ingestao excedido.") from None
+    except (requests.RequestException, ValueError):
+        raise HTTPException(status_code=502,
+                            detail="Falha ao consultar o indice da ingestao.") from None
 
     if not itens:
         return {"pergunta": pergunta.texto, "resultados": []}

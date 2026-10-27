@@ -58,12 +58,14 @@ class Documento(BaseModel):
 
 @app.post("/indexar")
 def indexar(docs: list[Documento]):
-    textos = [d.texto for d in docs]
-    vetorizador.ajustar([d["texto"] for d in INDICE] + textos or textos)
-    INDICE.clear()
-    # reindexa tudo com o vocabulario novo
-    for d in docs:
-        INDICE.append({"texto": d.texto, "origem": d.origem})
+    if not docs:
+        return {"indexados": len(INDICE)}
+
+    novos_itens = [{"texto": d.texto, "origem": d.origem} for d in docs]
+    textos = [item["texto"] for item in INDICE + novos_itens]
+    vetorizador.ajustar(textos)
+    INDICE.extend(novos_itens)
+    # Recalcula os vetores dos documentos antigos e novos com o mesmo vocabulario.
     for item in INDICE:
         item["vetor"] = vetorizador.vetorizar(item["texto"])
     

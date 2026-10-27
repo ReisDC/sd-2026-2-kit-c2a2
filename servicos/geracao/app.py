@@ -26,10 +26,22 @@ class Pergunta(BaseModel):
 
 @app.post("/perguntar")
 def perguntar(p: Pergunta):
-    r = requests.post(f"{URL_RECUPERACAO}/buscar",
-                      json={"pergunta": p.pergunta, "top_k": 3}, timeout=10)
-    r.raise_for_status()
-    contexto = [t["texto"] for t in r.json()["resultados"]]
+    try:
+        r = requests.post(f"{URL_RECUPERACAO}/recuperar",
+                          json={"texto": p.pergunta, "top_k": 3}, timeout=10)
+        r.raise_for_status()
+        contexto = [t["texto"] for t in r.json()["resultados"]]
+    except requests.Timeout:
+        raise HTTPException(status_code=504,
+                            detail="Tempo-limite da recuperacao excedido.") from None
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        raise HTTPException(status_code=502,
+                            detail="Falha ao recuperar os documentos.") from None
+
+    if not contexto:
+        return {"pergunta": p.pergunta,
+                "resposta": "Nao ha documentos indexados para responder a pergunta.",
+                "contexto": []}
 
     try:
         resposta = disjuntor.chamar(gerar, p.pergunta, contexto)
