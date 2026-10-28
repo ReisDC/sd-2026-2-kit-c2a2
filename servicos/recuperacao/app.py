@@ -9,21 +9,20 @@ import os
 import requests
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
 
 from servicos.comum.embeddings import Vetorizador
 
 app = FastAPI(title="Recuperacao - C2.A2")
 
-vetorizador = Vetorizador()
 URL_INGESTAO = os.getenv("URL_INGESTAO", "http://localhost:8001")
 INGESTAO_URL = f"{URL_INGESTAO.rstrip('/')}/indice"
 
 
 class Pergunta(BaseModel):
-    texto: str
-    top_k: int = 3
+    texto: str = Field(min_length=1)
+    top_k: int = Field(3, ge=1, le=20)
 
 
 @app.post("/recuperar")
@@ -50,7 +49,9 @@ def recuperar(pergunta: Pergunta):
     vetores = [item["vetor"] for item in itens]
     origens = [item["origem"] for item in itens]
 
-    # 3. Ajustar o vetorizador com todos os textos para garantir consistência no vocabulário
+    # 3. Ajustar o vetorizador com todos os textos para garantir consistência no vocabulário.
+    # Instancia local: um vetorizador global seria reajustado por requisicoes concorrentes.
+    vetorizador = Vetorizador()
     vetorizador.ajustar(textos)
 
     # 4. Vetorizar a pergunta do utilizador
@@ -68,8 +69,11 @@ def recuperar(pergunta: Pergunta):
     # 6. Ordenar por pontuação decrescente e selecionar os top_k
     indices_ordenados = np.argsort(similaridades)[::-1]
 
+    # Documentos sem nenhuma similaridade nao fundamentam a resposta.
     resultados = []
     for idx in indices_ordenados[:pergunta.top_k]:
+        if similaridades[idx] <= 0:
+            break
         resultados.append({
             "texto": textos[idx],
             "origem": origens[idx],
