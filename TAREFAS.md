@@ -12,13 +12,13 @@
       Envolver a chamada `gerar(...)` com `disjuntor.chamar(...)` e devolver 503
       quando o circuito estiver aberto. (Aula 11)
 
-- [ ] **4. Mensageria** - novo worker + `docker-compose.yml`
+- [X] **4. Mensageria** - novo worker + `docker-compose.yml`
       Ao menos UMA etapa do fluxo deve passar por fila, e nao por chamada direta. (Aula 8)
 
 - [X] **5. Fluxo completo** - de ponta a ponta
       Pergunta entra em /perguntar e sai uma resposta fundamentada nos documentos.
 
-- [ ] **6. README com diagrama** da arquitetura dos tres servicos.
+- [X] **6. README com diagrama** da arquitetura dos tres servicos.
 
 ## Extensoes opcionais
 
@@ -29,6 +29,6 @@
 
 ## Antes de entregar
 
-- [ ] Desligue a internet: o modo simulado do LLM mantem o sistema de pe?
-- [ ] Derrube o servico de recuperacao: o disjuntor abre como esperado?
-- [ ] A chave da API esta FORA do codigo (em variavel de ambiente)?
+- [X] Desligue a internet: o modo simulado do LLM mantem o sistema de pe?
+- [X] Derrube o servico de recuperacao: o disjuntor abre como esperado?
+- [X] A chave da API esta FORA do codigo (em variavel de ambiente)?
