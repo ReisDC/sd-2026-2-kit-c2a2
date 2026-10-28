@@ -1,7 +1,8 @@
 """
 Servico 3 - GERACAO: monta o prompt com o contexto e chama o LLM.
 
-Chamada ao LLM protegida com circuit breaker, timeout e retentativas.
+Chamada ao LLM protegida com circuit breaker, timeout e retentativas;
+se o LLM falhar, responde com os trechos recuperados (degradacao elegante).
 Chamada a recuperacao protegida por um disjuntor proprio.
 
 Rodar: uvicorn servicos.geracao.app:app --port 8003
@@ -52,20 +53,28 @@ def perguntar(p: Pergunta):
     if not contexto:
         return {"pergunta": p.pergunta,
                 "resposta": "Nenhum documento relevante encontrado para a pergunta.",
-                "contexto": []}
+                "contexto": [], "degradado": False}
 
+    # Degradacao elegante: se o LLM falhar, devolve os trechos recuperados
+    # em vez de um erro, informando o motivo.
     try:
         resposta = disjuntor.chamar(gerar, p.pergunta, contexto)
     except CircuitoAberto:
-        raise HTTPException(status_code=503,
-                            detail="LLM temporariamente indisponivel: circuito aberto.",
-                            headers={"Retry-After": str(disjuntor.espera_segundos)}) from None
+        return resposta_degradada(p.pergunta, contexto, "circuito_aberto")
     except requests.Timeout:
-        raise HTTPException(status_code=504, detail="Tempo-limite do LLM excedido.") from None
+        return resposta_degradada(p.pergunta, contexto, "timeout")
     except (requests.RequestException, ValueError, KeyError, IndexError):
-        raise HTTPException(status_code=502, detail="Falha ao obter resposta do LLM.") from None
+        return resposta_degradada(p.pergunta, contexto, "falha_llm")
 
-    return {"pergunta": p.pergunta, "resposta": resposta, "contexto": contexto}
+    return {"pergunta": p.pergunta, "resposta": resposta, "contexto": contexto,
+            "degradado": False}
+
+
+def resposta_degradada(pergunta, contexto, motivo):
+    return {"pergunta": pergunta,
+            "resposta": "LLM indisponivel no momento. Trechos mais relevantes "
+                        "encontrados nos documentos:\n" + "\n".join(contexto),
+            "contexto": contexto, "degradado": True, "motivo": motivo}
 
 
 @app.get("/saude")

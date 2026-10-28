@@ -75,13 +75,15 @@ o worker voltar.
    os trechos mais similares (trechos com similaridade zero são descartados).
 3. Sem trecho relevante, a geração responde sem chamar o LLM. Caso contrário,
    chama o LLM com o contexto e devolve a resposta e os trechos usados.
+   Se o LLM falhar, o sistema **degrada com elegância**: devolve os próprios
+   trechos recuperados, marcados com `"degradado": true`, em vez de um erro.
 
 ### Resiliência
 
 | Falha | Comportamento |
 |---|---|
-| LLM com erro/lento | Timeout de 20 s por tentativa, até 3 tentativas (esperas de 1 s e 2 s) para timeout, conexão e HTTP 408/429/5xx. Erro final: **504** (timeout) ou **502** |
-| LLM falhando seguidamente | Circuit breaker abre após 3 gerações com falha: **503** + `Retry-After` por 20 s; depois uma chamada de teste decide se fecha |
+| LLM com erro/lento | Timeout de 20 s por tentativa, até 3 tentativas (esperas de 1 s e 2 s) para timeout, conexão e HTTP 408/429/5xx. Se ainda falhar, **degrada**: responde 200 com os trechos recuperados, `"degradado": true` e `"motivo": "timeout"` ou `"falha_llm"` |
+| LLM falhando seguidamente | Circuit breaker abre após 3 gerações com falha: por 20 s o LLM nem é chamado e a resposta degradada sai na hora (`"motivo": "circuito_aberto"`); depois uma chamada de teste decide se fecha |
 | Recuperação fora do ar | Disjuntor próprio na geração: **502** nas 3 primeiras falhas, depois **503** imediato por 20 s |
 | Ingestão fora do ar | Recuperação responde **502/504**, contados pelo disjuntor da geração |
 | RabbitMQ fora do ar | `/indexar` tenta 3 vezes e responde **503**; o worker reconecta sozinho a cada 3 s |
@@ -161,7 +163,7 @@ python -m unittest discover -s tests -v
 
 | Arquivo | Cobre |
 |---|---|
-| `tests/test_resiliencia.py` | Retentativas, timeout, circuit breaker do LLM e da recuperação, modo simulado |
+| `tests/test_resiliencia.py` | Retentativas, timeout, circuit breaker do LLM e da recuperação, degradação elegante, modo simulado |
 | `tests/test_recuperacao.py` | Ordenação por similaridade, descarte de irrelevantes, validação de `top_k` |
 | `tests/test_mensageria.py` | Publicação na fila, worker, idempotência, dead letter, persistência atômica |
 

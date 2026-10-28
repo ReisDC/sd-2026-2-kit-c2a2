@@ -72,18 +72,31 @@ class ResilienciaTests(unittest.TestCase):
         self.assertEqual(circuito.estado, "aberto")
 
     @patch.object(geracao.requests, "post")
-    def test_endpoint_erros_e_circuito(self, post):
+    def test_endpoint_degrada_e_abre_circuito(self, post):
         post.return_value.json.return_value = {"resultados": [{"texto": "CAP"}]}
         with patch.object(geracao, "disjuntor", CircuitBreaker(3, 20)):
             with patch.object(geracao, "gerar", side_effect=requests.Timeout()) as gerar:
                 for _ in range(3):
-                    with self.assertRaises(HTTPException) as erro:
-                        geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
-                    self.assertEqual(erro.exception.status_code, 504)
-                with self.assertRaises(HTTPException) as erro:
-                    geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
-                self.assertEqual(erro.exception.status_code, 503)
+                    r = geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
+                    self.assertTrue(r["degradado"])
+                    self.assertEqual(r["motivo"], "timeout")
+                    self.assertEqual(r["contexto"], ["CAP"])
+                    self.assertIn("CAP", r["resposta"])
+                r = geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
+                self.assertEqual(r["motivo"], "circuito_aberto")
                 self.assertEqual(gerar.call_count, 3)
+
+    @patch.object(geracao.requests, "post")
+    def test_endpoint_falha_llm_degrada(self, post):
+        post.return_value.json.return_value = {"resultados": [{"texto": "CAP"}]}
+        with patch.object(geracao, "disjuntor", CircuitBreaker(3, 20)):
+            with patch.object(geracao, "gerar", side_effect=requests.ConnectionError()):
+                r = geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
+            self.assertEqual(r["motivo"], "falha_llm")
+            with patch.object(geracao, "gerar", return_value="resposta do LLM"):
+                r = geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
+            self.assertEqual(r["resposta"], "resposta do LLM")
+            self.assertFalse(r["degradado"])
 
     @patch.object(geracao.requests, "post")
     def test_recuperacao_fora_do_ar_abre_circuito(self, post):
