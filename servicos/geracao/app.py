@@ -2,6 +2,7 @@
 Servico 3 - GERACAO: monta o prompt com o contexto e chama o LLM.
 
 Chamada ao LLM protegida com circuit breaker, timeout e retentativas.
+Chamada a recuperacao protegida por um disjuntor proprio.
 
 Rodar: uvicorn servicos.geracao.app:app --port 8003
 """
@@ -9,7 +10,7 @@ import os
 
 import requests
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from servicos.comum.circuit_breaker import CircuitBreaker, CircuitoAberto
 from servicos.comum.llm import gerar
@@ -18,19 +19,29 @@ app = FastAPI(title="Geracao - C2.A2")
 URL_RECUPERACAO = os.getenv("URL_RECUPERACAO", "http://localhost:8002")
 
 disjuntor = CircuitBreaker(limite_falhas=3, espera_segundos=20)
+disjuntor_recuperacao = CircuitBreaker(limite_falhas=3, espera_segundos=20)
 
 
 class Pergunta(BaseModel):
-    pergunta: str
+    pergunta: str = Field(min_length=1)
+
+
+def recuperar_contexto(pergunta):
+    r = requests.post(f"{URL_RECUPERACAO}/recuperar",
+                      json={"texto": pergunta, "top_k": 3}, timeout=10)
+    r.raise_for_status()
+    return [t["texto"] for t in r.json()["resultados"]]
 
 
 @app.post("/perguntar")
 def perguntar(p: Pergunta):
     try:
-        r = requests.post(f"{URL_RECUPERACAO}/recuperar",
-                          json={"texto": p.pergunta, "top_k": 3}, timeout=10)
-        r.raise_for_status()
-        contexto = [t["texto"] for t in r.json()["resultados"]]
+        contexto = disjuntor_recuperacao.chamar(recuperar_contexto, p.pergunta)
+    except CircuitoAberto:
+        raise HTTPException(status_code=503,
+                            detail="Recuperacao temporariamente indisponivel: circuito aberto.",
+                            headers={"Retry-After":
+                                     str(disjuntor_recuperacao.espera_segundos)}) from None
     except requests.Timeout:
         raise HTTPException(status_code=504,
                             detail="Tempo-limite da recuperacao excedido.") from None
@@ -40,7 +51,7 @@ def perguntar(p: Pergunta):
 
     if not contexto:
         return {"pergunta": p.pergunta,
-                "resposta": "Nao ha documentos indexados para responder a pergunta.",
+                "resposta": "Nenhum documento relevante encontrado para a pergunta.",
                 "contexto": []}
 
     try:
@@ -59,4 +70,5 @@ def perguntar(p: Pergunta):
 
 @app.get("/saude")
 def saude():
-    return {"status": "ok", "disjuntor": disjuntor.estado}
+    return {"status": "ok", "disjuntor": disjuntor.estado,
+            "disjuntor_recuperacao": disjuntor_recuperacao.estado}

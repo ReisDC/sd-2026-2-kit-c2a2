@@ -85,6 +85,19 @@ class ResilienciaTests(unittest.TestCase):
                 self.assertEqual(erro.exception.status_code, 503)
                 self.assertEqual(gerar.call_count, 3)
 
+    @patch.object(geracao.requests, "post")
+    def test_recuperacao_fora_do_ar_abre_circuito(self, post):
+        post.side_effect = requests.ConnectionError()
+        with patch.object(geracao, "disjuntor_recuperacao", CircuitBreaker(3, 20)):
+            for _ in range(3):
+                with self.assertRaises(HTTPException) as erro:
+                    geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
+                self.assertEqual(erro.exception.status_code, 502)
+            with self.assertRaises(HTTPException) as erro:
+                geracao.perguntar(geracao.Pergunta(pergunta="CAP?"))
+            self.assertEqual(erro.exception.status_code, 503)
+            self.assertEqual(post.call_count, 3)
+
     def test_simulado_sem_api(self):
         with patch.object(llm, "API_KEY", ""), patch.object(llm.requests, "post") as post:
             self.assertIn("CAP", llm.gerar("O que e CAP?", ["CAP e um teorema."]))
