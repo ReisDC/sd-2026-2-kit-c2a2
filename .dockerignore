@@ -1,0 +1,9 @@
+.git
+.venv
+venv
+.env
+__pycache__
+*.py[cod]
+indice.json*
+tests
+documentos

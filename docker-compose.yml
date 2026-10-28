@@ -1,7 +1,64 @@
-services:
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+x-app: &app
+  build: .
+  image: c2a2-rag
+  restart: unless-stopped
 
-  # TAREFA 4: acrescente aqui os tres servicos (ingestao, recuperacao, geracao)
-  # depois de escrever um Dockerfile para cada um.
+x-rabbitmq: &rabbitmq
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ingestao:
+    <<: *app
+    command: uvicorn servicos.ingestao.app:app --host 0.0.0.0 --port 8001
+    ports: ["8001:8001"]
+    environment:
+      <<: *rabbitmq
+      INDICE_ARQUIVO: /dados/indice.json
+    volumes: [indice:/dados]
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+
+  worker-indexacao:
+    <<: *app
+    command: python -m servicos.ingestao.worker
+    environment:
+      <<: *rabbitmq
+      INDICE_ARQUIVO: /dados/indice.json
+    volumes: [indice:/dados]
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+
+  recuperacao:
+    <<: *app
+    command: uvicorn servicos.recuperacao.app:app --host 0.0.0.0 --port 8002
+    ports: ["8002:8002"]
+    environment:
+      URL_INGESTAO: http://ingestao:8001
+    depends_on: [ingestao]
+
+  geracao:
+    <<: *app
+    command: uvicorn servicos.geracao.app:app --host 0.0.0.0 --port 8003
+    ports: ["8003:8003"]
+    environment:
+      URL_RECUPERACAO: http://recuperacao:8002
+      # Lidas do .env (se existir); vazio = modo simulado.
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_API_URL: ${LLM_API_URL:-https://api.openai.com/v1/chat/completions}
+      LLM_MODELO: ${LLM_MODELO:-gpt-4o-mini}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-20}
+      LLM_TENTATIVAS: ${LLM_TENTATIVAS:-3}
+      LLM_ESPERA_RETRY: ${LLM_ESPERA_RETRY:-1}
+    depends_on: [recuperacao]
+
+volumes:
+  indice:

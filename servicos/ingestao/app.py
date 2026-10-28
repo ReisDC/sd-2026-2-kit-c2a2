@@ -1,88 +1,69 @@
 """
-Servico 1 - INGESTAO: recebe documentos, gera embeddings e armazena.
+Servico 1 - INGESTAO: recebe documentos e entrega o indice a recuperacao.
 
-TAREFA 1: persistir o indice em disco para nao perder ao reiniciar.
-Rodar: uvicorn servicos.ingestao.app:app --port 8001 --reload
+POST /indexar NAO vetoriza na hora: publica os documentos na fila
+"indexacao" (RabbitMQ) e responde 202. O worker (servicos/ingestao/worker.py)
+consome a fila, gera os embeddings e grava o indice em disco (TAREFA 1).
+GET /indice le o arquivo gravado pelo worker.
+
+Rodar: uvicorn servicos.ingestao.app:app --port 8001
 """
-import json
 import os
-from fastapi import FastAPI
-from pydantic import BaseModel
+import uuid
+from threading import Lock
+from typing import Annotated
 
-from servicos.comum.embeddings import Vetorizador
+from fastapi import Body, FastAPI, HTTPException
+
+from servicos.comum import fila
+from servicos.ingestao import indice as armazenamento
+from servicos.ingestao.modelos import Documento
 
 app = FastAPI(title="Ingestao - C2.A2")
 
-vetorizador = Vetorizador()
-INDICE = []
-INDICE_FILE = "indice.json"
+# Cache do indice em memoria, recarregado quando o worker regrava o arquivo.
+_cache = {"assinatura": None, "itens": []}
+_lock = Lock()
 
 
-def carregar_indice():
-    """Carrega o índice do disco ao iniciar o serviço."""
-    global INDICE
-    if os.path.exists(INDICE_FILE):
-        try:
-            with open(INDICE_FILE, "r", encoding="utf-8") as f:
-                INDICE = json.load(f)
-            if INDICE:
-                # Reajusta o vetorizador com os textos salvos para manter o vocabulário
-                textos = [item["texto"] for item in INDICE]
-                vetorizador.ajustar(textos)
-                # Garante que os vetores estejam atualizados
-                for item in INDICE:
-                    item["vetor"] = vetorizador.vetorizar(item["texto"])
-            print(f"[ingestao] Índice carregado do disco: {len(INDICE)} documentos.")
-        except Exception as e:
-            print(f"[ingestao] Erro ao carregar índice do disco: {e}")
-            INDICE = []
-
-
-def salvar_indice():
-    """Salva o índice atual em um arquivo JSON no disco."""
+def indice_atual():
     try:
-        with open(INDICE_FILE, "w", encoding="utf-8") as f:
-            json.dump(INDICE, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[ingestao] Erro ao salvar índice no disco: {e}")
+        estado = os.stat(armazenamento.ARQUIVO)
+    except FileNotFoundError:
+        return []
+    assinatura = (estado.st_mtime_ns, estado.st_size)
+    with _lock:
+        if _cache["assinatura"] != assinatura:
+            _cache["itens"] = armazenamento.carregar()
+            _cache["assinatura"] = assinatura
+        return _cache["itens"]
 
 
-# Executa o carregamento na inicialização
-carregar_indice()
-
-
-class Documento(BaseModel):
-    texto: str
-    origem: str = "desconhecida"
-
-
-@app.post("/indexar")
-def indexar(docs: list[Documento]):
-    if not docs:
-        return {"indexados": len(INDICE)}
-
-    novos_itens = [{"texto": d.texto, "origem": d.origem} for d in docs]
-    textos = [item["texto"] for item in INDICE + novos_itens]
-    vetorizador.ajustar(textos)
-    INDICE.extend(novos_itens)
-    # Recalcula os vetores dos documentos antigos e novos com o mesmo vocabulario.
-    for item in INDICE:
-        item["vetor"] = vetorizador.vetorizar(item["texto"])
-    
-    # TAREFA 1: Salva as alterações em disco
-    salvar_indice()
-    
-    return {"indexados": len(INDICE)}
+@app.post("/indexar", status_code=202)
+def indexar(docs: Annotated[list[Documento], Body(min_length=1)]):
+    mensagem = {"id": str(uuid.uuid4()), "documentos": [d.model_dump() for d in docs]}
+    try:
+        fila.publicar(mensagem)
+    except fila.ERROS_BROKER:
+        raise HTTPException(status_code=503,
+                            detail="Fila de indexacao indisponivel.") from None
+    return {"status": "enfileirado", "id": mensagem["id"], "documentos": len(docs)}
 
 
 @app.get("/indice")
 def indice():
     """Consumido pelo servico de recuperacao."""
-    return {"total": len(INDICE),
-            "itens": [{"texto": i["texto"], "origem": i["origem"],
-                       "vetor": i["vetor"]} for i in INDICE]}
+    try:
+        itens = indice_atual()
+    except (OSError, ValueError):
+        raise HTTPException(status_code=503, detail="Indice ilegivel no disco.") from None
+    return {"total": len(itens), "itens": itens}
 
 
 @app.get("/saude")
 def saude():
-    return {"status": "ok", "documentos": len(INDICE)}
+    try:
+        documentos = len(indice_atual())
+    except (OSError, ValueError):
+        documentos = None
+    return {"status": "ok", "documentos": documentos}
